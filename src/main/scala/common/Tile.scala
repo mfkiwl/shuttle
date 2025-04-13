@@ -375,6 +375,8 @@ class ShuttleTileModuleImp(outer: ShuttleTile) extends BaseTileModuleImp(outer)
         rocc.module.io.fpu_resp.valid := false.B
         rocc.module.io.fpu_resp.bits := DontCare
 
+        assert(!(rocc.module.io.mem.req.valid && !rocc.module.io.mem.req.bits.phys))
+
         dcachePorts(i + 2).req.valid := rocc.module.io.mem.req.valid
         dcachePorts(i + 2).req.bits.addr := rocc.module.io.mem.req.bits.addr
         dcachePorts(i + 2).req.bits.tag := rocc.module.io.mem.req.bits.tag
