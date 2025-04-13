@@ -289,7 +289,7 @@ class ShuttleTileModuleImp(outer: ShuttleTile) extends BaseTileModuleImp(outer)
     }.getOrElse(0.U)
   }
 
-  val dcachePorts = Wire(Vec(2, new ShuttleDCacheIO))
+  val dcachePorts = Wire(Vec(2 + outer.roccs.size, new ShuttleDCacheIO))
   val ptwPorts = Wire(Vec(outer.nPTWPorts, new TLBPTWIO))
   val edge = outer.dcache.node.edges.out(0)
   ptwPorts(0) <> core.io.ptw_tlb
@@ -370,13 +370,57 @@ class ShuttleTileModuleImp(outer: ShuttleTile) extends BaseTileModuleImp(outer)
           ptwPortId += 1
         }
         rocc.module.io.cmd <> cmdRouter.io.out(i)
-        rocc.module.io.mem := DontCare
-        rocc.module.io.mem.req.ready := false.B
-        assert(!rocc.module.io.mem.req.valid)
         respArb.io.in(i) <> Queue(rocc.module.io.resp)
         rocc.module.io.fpu_req.ready := false.B
         rocc.module.io.fpu_resp.valid := false.B
         rocc.module.io.fpu_resp.bits := DontCare
+
+        dcachePorts(i + 2).req.valid := rocc.module.io.mem.req.valid
+        dcachePorts(i + 2).req.bits.addr := rocc.module.io.mem.req.bits.addr
+        dcachePorts(i + 2).req.bits.tag := rocc.module.io.mem.req.bits.tag
+        dcachePorts(i + 2).req.bits.cmd := rocc.module.io.mem.req.bits.cmd
+        dcachePorts(i + 2).req.bits.size := rocc.module.io.mem.req.bits.size
+        dcachePorts(i + 2).req.bits.signed := rocc.module.io.mem.req.bits.signed
+        dcachePorts(i + 2).req.bits.data := rocc.module.io.mem.req.bits.data
+        dcachePorts(i + 2).req.bits.mask := rocc.module.io.mem.req.bits.mask
+        rocc.module.io.mem.req.ready := dcachePorts(i + 2).req.ready
+
+        dcachePorts(i + 2).s1_paddr := RegEnable(rocc.module.io.mem.req.bits.addr, rocc.module.io.mem.req.valid)
+        dcachePorts(i + 2).s1_kill := rocc.module.io.mem.s1_kill
+        dcachePorts(i + 2).s1_data.data := rocc.module.io.mem.req.bits.data
+        dcachePorts(i + 2).s1_data.mask := DontCare
+        rocc.module.io.mem.s2_nack := dcachePorts(i + 2).s2_nack
+        dcachePorts(i + 2).s2_kill := rocc.module.io.mem.s2_kill
+
+        rocc.module.io.mem.resp.valid := dcachePorts(i + 2).resp.valid
+        rocc.module.io.mem.resp.bits := DontCare
+        rocc.module.io.mem.resp.bits.has_data := true.B
+        rocc.module.io.mem.resp.bits.tag := dcachePorts(i + 2).resp.bits.tag
+        rocc.module.io.mem.resp.bits.data := dcachePorts(i + 2).resp.bits.data
+        rocc.module.io.mem.resp.bits.size := dcachePorts(i + 2).resp.bits.size
+        rocc.module.io.mem.ordered := dcachePorts(i + 2).ordered
+        dcachePorts(i + 2).keep_clock_enabled := rocc.module.io.mem.keep_clock_enabled
+        rocc.module.io.mem.clock_enabled := dcachePorts(i + 2).clock_enabled
+        rocc.module.io.mem.perf := dcachePorts(i + 2).perf
+        rocc.module.io.mem.s2_nack_cause_raw := false.B
+        rocc.module.io.mem.s2_uncached := false.B
+        rocc.module.io.mem.replay_next := false.B
+        rocc.module.io.mem.s2_gpa := false.B
+        rocc.module.io.mem.s2_gpa_is_pte := false.B
+        rocc.module.io.mem.store_pending := false.B
+
+        val rocc_s2_addr = Pipe(rocc.module.io.mem.req.fire, rocc.module.io.mem.req.bits.addr, 2).bits
+        val rocc_s2_legal = edge.manager.findSafe(rocc_s2_addr).reduce(_||_)
+        rocc.module.io.mem.s2_paddr := rocc_s2_addr
+        rocc.module.io.mem.s2_xcpt.ae.ld := !(rocc_s2_legal &&
+          edge.manager.fastProperty(rocc_s2_addr, p => TransferSizes.asBool(p.supportsGet), (b: Boolean) => b.B))
+        rocc.module.io.mem.s2_xcpt.ae.st := false.B
+        rocc.module.io.mem.s2_xcpt.pf.ld := false.B
+        rocc.module.io.mem.s2_xcpt.pf.st := false.B
+        rocc.module.io.mem.s2_xcpt.gf.ld := false.B
+        rocc.module.io.mem.s2_xcpt.gf.st := false.B
+        rocc.module.io.mem.s2_xcpt.ma.ld := false.B
+        rocc.module.io.mem.s2_xcpt.ma.st := false.B
       }
       val nFPUPorts = outer.roccs.count(_.usesFPU)
       if (nFPUPorts > 0) {
@@ -410,7 +454,7 @@ class ShuttleTileModuleImp(outer: ShuttleTile) extends BaseTileModuleImp(outer)
   }
 
 
-  val dcacheArb = Module(new ShuttleDCacheArbiter(2)(outer.p))
+  val dcacheArb = Module(new ShuttleDCacheArbiter(2 + outer.roccs.size)(outer.p))
   outer.dcache.module.io <> dcacheArb.io.mem
 
   core.io.ptw <> ptw.io.dpath
